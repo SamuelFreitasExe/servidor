@@ -1,5 +1,3 @@
-
-
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
@@ -67,19 +65,23 @@ app.get('/test', (req, res) => {
 
 // Endpoint para adicionar uma roupa
 app.post('/api/adicionar-roupa', upload.single('foto'), (req, res) => {
-  const nome = req.body.nome;
-  const foto = req.file ? req.file.filename : null;
+  const { nome, preco } = req.body;
+  const foto = req.file ? req.file.filename : '';
 
-  if (!nome || !foto) {
-    return res.status(400).json({ message: 'Nome e foto são necessários.' });
+  if (!nome || !preco || !foto) {
+    return res.status(400).json({ message: 'Nome, preço e foto são necessários.' });
   }
 
-  pool.query('INSERT INTO roupas (nome, caminho) VALUES (?, ?)', [nome, foto], (err) => {
-    if (err) {
-      return res.status(500).json({ message: 'Erro ao adicionar roupa.', error: err });
+  pool.query(
+    'INSERT INTO roupas (nome, preco, caminho) VALUES (?, ?, ?)',
+    [nome, preco, foto],
+    (err) => {
+      if (err) {
+        return res.status(500).json({ message: 'Erro ao adicionar roupa.', error: err });
+      }
+      res.json({ message: 'Roupa adicionada com sucesso!' });
     }
-    res.json({ message: 'Roupa adicionada com sucesso!' });
-  });
+  );
 });
 
 // Endpoint para listar roupas
