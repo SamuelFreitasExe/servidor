@@ -1,4 +1,4 @@
-require('events').EventEmitter.defaultMaxListeners = 20; // Aumente o número conforme necessário
+
 
 import express from 'express';
 import multer from 'multer';
