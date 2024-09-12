@@ -1,0 +1,7 @@
+.env
+# Ignorar o arquivo .env
+.env
+
+# Outras pastas e arquivos que podem ser ignorados
+/node_modules
+/uploads
