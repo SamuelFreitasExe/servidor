@@ -2,10 +2,9 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import mysql2 from 'mysql2';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
 
 // Carregar as variáveis de ambiente
 dotenv.config();
@@ -15,48 +14,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = process.env.PORT || 3000;
+
 
 // Middleware para habilitar CORS, JSON e urlencoded
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Certificar-se de que o diretório de uploads existe
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
-}
+// Configuração do cliente Supabase
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Configuração do multer para upload de arquivos
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir); // Diretório de uploads
-  },
-  filename: function (req, file, cb) {
-    cb(null, file.originalname); // Manter o nome original do arquivo
-  }
-});
-
+// Configuração do multer para uploads em memória
+const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
-
-// Conexão com o banco de dados MySQL
-const pool = mysql2.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
-});
-
-// Testar conexão com o banco de dados
-pool.getConnection((err, connection) => {
-  if (err) {
-    console.error('Erro ao conectar no banco de dados:', err);
-    process.exit(1);
-  }
-  console.log('Conectado ao banco de dados MySQL');
-  connection.release(); // Liberar a conexão
-});
 
 // Endpoint de teste
 app.get('/test', (req, res) => {
@@ -64,38 +36,60 @@ app.get('/test', (req, res) => {
 });
 
 // Endpoint para adicionar uma roupa
-app.post('/api/adicionar-roupa', upload.single('foto'), (req, res) => {
+app.post('/api/adicionar-roupa', upload.single('foto'), async (req, res) => {
   const { nome, preco } = req.body;
-  const foto = req.file ? req.file.filename : '';
+  const foto = req.file;
 
   if (!nome || !preco || !foto) {
     return res.status(400).json({ message: 'Nome, preço e foto são necessários.' });
   }
 
-  pool.query(
-    'INSERT INTO roupas (nome, preco, caminho) VALUES (?, ?, ?)',
-    [nome, preco, foto],
-    (err) => {
-      if (err) {
-        return res.status(500).json({ message: 'Erro ao adicionar roupa.', error: err });
-      }
-      res.json({ message: 'Roupa adicionada com sucesso!' });
+  try {
+    // Upload da imagem no Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('roupas') // Nome do bucket no Supabase
+      .upload(`fotos/${Date.now()}_${foto.originalname}`, foto.buffer, {
+        contentType: foto.mimetype,
+      });
+
+    if (uploadError) {
+      throw uploadError;
     }
-  );
+
+    // URL pública do arquivo
+    const fotoUrl = `${supabase.storage.from('roupas').getPublicUrl(uploadData.path).data.publicUrl}`;
+
+    // Inserir os dados no banco
+    const { error: insertError } = await supabase
+      .from('roupas') // Nome da tabela
+      .insert([{ nome, preco, caminho: fotoUrl }]);
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    res.json({ message: 'Roupa adicionada com sucesso!', fotoUrl });
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao adicionar roupa.', error });
+  }
 });
 
 // Endpoint para listar roupas
-app.get('/api/roupas', (req, res) => {
-  pool.query('SELECT * FROM roupas', (err, results) => {
-    if (err) {
-      return res.status(500).json({ message: 'Erro ao buscar roupas.', error: err });
-    }
-    res.json(results);
-  });
-});
+app.get('/api/roupas', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('roupas') // Nome da tabela
+      .select('*');
 
-// Servir arquivos estáticos (imagens) da pasta "uploads"
-app.use('/uploads', express.static(uploadDir));
+    if (error) {
+      throw error;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Erro ao buscar roupas.', error });
+  }
+});
 
 // Iniciar o servidor
 app.listen(port, () => {
