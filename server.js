@@ -1,98 +1,117 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv'; // Adicionar esta linha
 
-// Carregar as variáveis de ambiente
-dotenv.config();
+dotenv.config(); // Carregar as variáveis de ambiente
 
-// Configuração do caminho atual do arquivo
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
-const port = process.env.PORT || 3000;
-
-
-// Middleware para habilitar CORS, JSON e urlencoded
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Configuração do cliente Supabase
-const supabaseUrl = process.env.SUPABASE_URL;
+// Configurações do Supabase
+const supabaseUrl = process.env.SUPABASE_URL; // Atribuindo as variáveis de ambiente
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Configuração do multer para uploads em memória
-const storage = multer.memoryStorage();
+const app = express();
+const port = 3000;
+
+// Habilitando CORS para todas as origens
+app.use(cors()); // Permite requisições de qualquer origem
+
+app.use(express.json());
+
+// Configuração do multer para armazenar imagens na memória
+const storage = multer.memoryStorage(); // Usando memória em vez de armazenamento local
 const upload = multer({ storage: storage });
 
-// Endpoint de teste
-app.get('/test', (req, res) => {
-  res.send('Endpoint está funcionando!');
-});
-
-// Endpoint para adicionar uma roupa
-app.post('/api/adicionar-roupa', upload.single('foto'), async (req, res) => {
-  const { nome, preco } = req.body;
-  const foto = req.file;
-
-  if (!nome || !preco || !foto) {
-    return res.status(400).json({ message: 'Nome, preço e foto são necessários.' });
-  }
-
+// Rota para adicionar produto
+app.post('/api/products', upload.single('foto'), async (req, res) => {
   try {
-    // Upload da imagem no Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('roupas') // Nome do bucket no Supabase
-      .upload(`fotos/${Date.now()}_${foto.originalname}`, foto.buffer, {
-        contentType: foto.mimetype,
+    const { name, description, price, stock, season } = req.body;
+    const file = req.file;
+
+    console.log('Arquivo recebido:', file);
+    console.log('Dados do produto:', req.body);  // Aqui você deve ver os dados corretamente
+
+    // Validar se o arquivo foi enviado
+    if (!file || !file.buffer) {
+      return res.status(400).json({ message: 'A foto do produto é obrigatória ou está inválida.' });
+    }
+
+    // Gerar um nome único para o arquivo
+    const fileName = `products/${Date.now()}-${file.originalname}`;
+
+    // Fazer o upload para o Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('collections')
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true,
       });
 
-    if (uploadError) {
-      throw uploadError;
-    }
-
-    // URL pública do arquivo
-    const fotoUrl = `${supabase.storage.from('roupas').getPublicUrl(uploadData.path).data.publicUrl}`;
-
-    // Inserir os dados no banco
-    const { error: insertError } = await supabase
-      .from('roupas') // Nome da tabela
-      .insert([{ nome, preco, caminho: fotoUrl }]);
-
-    if (insertError) {
-      throw insertError;
-    }
-
-    res.json({ message: 'Roupa adicionada com sucesso!', fotoUrl });
-  } catch (error) {
-    res.status(500).json({ message: 'Erro ao adicionar roupa.', error });
-  }
-});
-
-// Endpoint para listar roupas
-app.get('/api/roupas', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('roupas') // Nome da tabela
-      .select('*');
-
     if (error) {
-      throw error;
+      console.error('Erro ao fazer upload:', error);
+      return res.status(400).json({ message: 'Erro ao enviar a imagem para o Supabase Storage', error });
     }
 
-    res.json(data);
+    const fullPath =`${supabaseUrl}/storage/v1/object/public/collections/${data.path}`;
+
+    if (!data || !data.path) {
+      return res.status(400).json({ message: 'Erro ao obter o caminho da imagem no Supabase' });
+    }
+
+    // Inserir o produto na tabela "products"
+    const { data: productData, error: productError } = await supabase
+      .from('products')
+      .insert([
+        {
+          name,
+          description,
+          price: parseFloat(price),  // Garantir que price é um número
+          stock: parseInt(stock, 10),  // Garantir que stock é um número inteiro
+          season,
+          image_path: fileName,
+          image_url: fullPath,
+          created_at: new Date(),
+        },
+      ]);
+
+    if (productError) {
+      console.error('Erro ao salvar produto na tabela:', productError);
+      return res.status(400).json({ message: 'Erro ao salvar produto na tabela', error: productError });
+    }
+
+    // Certifique-se de que os dados do produto estão sendo retornados corretamente
+    res.status(201).json({
+      message: 'Produto adicionado com sucesso!',
+      product: productData,
+      imageDetails: { fullPath, path: data.path },
+    });
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao buscar roupas.', error });
+    console.error('Erro interno do servidor:', error);
+    return res.status(500).json({ message: 'Erro interno do servidor', error });
+  }
+});
+// Rota para listar produtos
+app.get('/api/products', async (req, res) => {
+  try {
+    // Buscar os produtos na tabela 'products' do Supabase
+    const { data, error } = await supabase.from('products').select('*');
+    if (error) {
+      console.error('Erro ao carregar produtos:', error);
+      return res.status(400).json({ message: 'Erro ao carregar produtos', error });
+    }
+    if (data.length === 0) {
+      return res.status(200).json({ message: 'Nenhum produto encontrado' });
+    }
+    // Retorna os produtos em formato JSON
+    res.status(200).json({ products: data });
+  } catch (error) {
+    console.error('Erro interno do servidor:', error);
+    return res.status(500).json({ message: 'Erro interno do servidor', error });
   }
 });
 
-// Iniciar o servidor
+// Inicia o servidor
 app.listen(port, () => {
-  console.log(`Servidor rodando na porta ${port}`);
+  console.log(`Servidor rodando em http://localhost:${port}`);
 });
